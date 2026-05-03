@@ -35,6 +35,9 @@ public final class FileMigrator {
     }
 
     public static boolean shouldSkipLargeUnknown(DiscoveredFile file) throws IOException {
+        if (DataAdapters.UNSUPPORTED.equals(file.adapter())) {
+            return true;
+        }
         if (file.explicit()) {
             return false;
         }

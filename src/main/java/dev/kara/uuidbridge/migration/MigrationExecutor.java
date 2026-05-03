@@ -3,6 +3,7 @@ package dev.kara.uuidbridge.migration;
 import dev.kara.uuidbridge.migration.io.JsonCodecs;
 import dev.kara.uuidbridge.migration.io.SafeFileWriter;
 import dev.kara.uuidbridge.migration.io.UuidBridgePaths;
+import dev.kara.uuidbridge.migration.adapter.DataAdapters;
 import dev.kara.uuidbridge.migration.rewrite.SingleplayerPlayerExtractor;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -115,7 +116,7 @@ public final class MigrationExecutor {
         for (DiscoveredFile file : WorldFileScanner.discoverTargets(paths, targetsFile, plan.pluginTargetsEnabled())) {
             try {
                 if (FileMigrator.shouldSkipLargeUnknown(file)) {
-                    skipped.add(MigrationPlanner.label(paths, file.path()) + ": skipped large unknown binary file");
+                    skipped.add(MigrationPlanner.label(paths, file.path()) + ": " + skipReason(file));
                     continue;
                 }
                 FileChangeResult preview = FileMigrator.preview(file, plan.mappings());
@@ -182,7 +183,28 @@ public final class MigrationExecutor {
         List<String> skipped,
         List<String> errors
     ) throws IOException {
-        for (Path file : WorldFileScanner.playerUuidFiles(paths)) {
+        if (!applyFileRenames(paths, plan, backups, changed, skipped, errors,
+            WorldFileScanner.playerUuidFiles(paths), "rename")) {
+            return false;
+        }
+        if (plan.pluginTargetsEnabled() && !applyFileRenames(paths, plan, backups, changed, skipped, errors,
+            WorldFileScanner.pluginUuidFiles(paths), "plugin-rename")) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean applyFileRenames(
+        UuidBridgePaths paths,
+        MigrationPlan plan,
+        BackupManager backups,
+        List<PlannedChange> changed,
+        List<String> skipped,
+        List<String> errors,
+        List<Path> files,
+        String operation
+    ) throws IOException {
+        for (Path file : files) {
             String newName = MigrationPlanner.renamedPlayerFile(file, plan.mappings());
             if (newName == null) {
                 continue;
@@ -195,9 +217,9 @@ public final class MigrationExecutor {
                 return false;
             }
             try {
-                backups.backup(file, target, "rename");
+                backups.backup(file, target, operation);
                 SafeFileWriter.moveAtomic(file, target);
-                changed.add(new PlannedChange(MigrationPlanner.label(paths, file) + " -> " + target.getFileName(), 1, "rename"));
+                changed.add(new PlannedChange(MigrationPlanner.label(paths, file) + " -> " + target.getFileName(), 1, operation));
             } catch (IOException exception) {
                 errors.add(MigrationPlanner.label(paths, file) + ": " + exception.getMessage());
                 return false;
@@ -253,6 +275,13 @@ public final class MigrationExecutor {
             }
         }
         return new RestoreResult(List.copyOf(restored), List.copyOf(errors));
+    }
+
+    private static String skipReason(DiscoveredFile file) {
+        if (DataAdapters.UNSUPPORTED.equals(file.adapter())) {
+            return "unsupported plugin storage";
+        }
+        return "skipped large unknown binary file";
     }
 
     private static MigrationReport report(

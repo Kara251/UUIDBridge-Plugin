@@ -154,6 +154,14 @@ public final class MigrationPlanner {
                 changes.add(new PlannedChange(label(paths, file) + " -> " + renamed, 1, "rename"));
             }
         }
+        if (pluginTargetsEnabled) {
+            for (Path file : WorldFileScanner.pluginUuidFiles(paths)) {
+                String renamed = renamedPlayerFile(file, mappings);
+                if (renamed != null) {
+                    changes.add(new PlannedChange(label(paths, file) + " -> " + renamed, 1, "plugin-rename"));
+                }
+            }
+        }
         if (singleplayerPlayerCopy != null) {
             changes.add(new PlannedChange(singleplayerPlayerCopy.sourcePath() + " -> "
                 + singleplayerPlayerCopy.targetPath(), 1, "singleplayer-player-copy"));

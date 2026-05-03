@@ -77,6 +77,23 @@ public final class WorldFileScanner {
         return result;
     }
 
+    public static List<Path> pluginUuidFiles(UuidBridgePaths paths) throws IOException {
+        Path pluginsDir = paths.gameDir().resolve("plugins");
+        if (!Files.isDirectory(pluginsDir)) {
+            return List.of();
+        }
+        List<Path> result = new ArrayList<>();
+        Path root = canonicalRoot(pluginsDir);
+        try (Stream<Path> stream = Files.walk(root)) {
+            stream.filter(Files::isRegularFile)
+                .filter(path -> !isPluginExcluded(root, path))
+                .map(path -> displayPath(pluginsDir, root, path))
+                .filter(path -> PluginTargetPresets.isRenameTarget(paths.gameDir(), path))
+                .forEach(result::add);
+        }
+        return List.copyOf(result);
+    }
+
     private static void addDirectoryFiles(List<Path> result, Path directory, Set<String> extensions) throws IOException {
         if (!Files.isDirectory(directory)) {
             return;
@@ -192,6 +209,9 @@ public final class WorldFileScanner {
     }
 
     private static String skipReason(DiscoveredFile file) throws IOException {
+        if (DataAdapters.UNSUPPORTED.equals(file.adapter())) {
+            return "unsupported plugin storage";
+        }
         if (FileMigrator.shouldSkipLargeUnknown(file)) {
             return "unknown binary file over " + DataAdapters.DEFAULT_BINARY_SIZE_LIMIT + " bytes";
         }
@@ -252,19 +272,60 @@ public final class WorldFileScanner {
             stream.filter(Files::isRegularFile)
                 .filter(path -> !isDefaultExcluded(paths.gameDir(), path))
                 .filter(path -> !isDefaultExcluded(pluginsDir, path))
-                .filter(path -> !isPluginExcluded(root, path))
-                .filter(WorldFileScanner::isPluginDataFile)
-                .forEach(path -> add(result, displayPath(pluginsDir, root, path),
-                    DataAdapters.forFile(path).id(), "plugins", false));
+                .forEach(path -> addPluginFile(result, paths, pluginsDir, root, path));
         }
     }
 
-    private static boolean isPluginDataFile(Path path) {
+    private static void addPluginFile(
+        Map<Path, DiscoveredFile> result,
+        UuidBridgePaths paths,
+        Path pluginsDir,
+        Path root,
+        Path file
+    ) {
+        Path display = displayPath(pluginsDir, root, file);
+        if (isPluginExcluded(root, file)) {
+            if (isPluginReportableSkippedFile(file)) {
+                add(result, display, DataAdapters.UNSUPPORTED, "plugins-skipped", false);
+            }
+            return;
+        }
+        Optional<PluginTargetPresets.Target> preset = PluginTargetPresets.targetFor(paths.gameDir(), display);
+        if (preset.isPresent()) {
+            add(result, display, preset.get().adapter(), "plugin-preset:" + preset.get().name(), false);
+            return;
+        }
+        if (isPluginSupportedDataFile(file)) {
+            add(result, display, DataAdapters.forFile(file).id(), "plugins", false);
+            return;
+        }
+        if (isPluginUnsupportedReportFile(file)) {
+            add(result, display, DataAdapters.UNSUPPORTED, "plugins-unsupported", false);
+        }
+    }
+
+    private static boolean isPluginReportableSkippedFile(Path path) {
+        return isPluginSupportedDataFile(path) || isPluginUnsupportedReportFile(path);
+    }
+
+    private static boolean isPluginSupportedDataFile(Path path) {
         String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
         return name.endsWith(".json")
             || name.endsWith(".dat")
             || name.endsWith(".dat_old")
             || name.endsWith(".mca");
+    }
+
+    private static boolean isPluginUnsupportedReportFile(Path path) {
+        String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+        return name.endsWith(".yml")
+            || name.endsWith(".yaml")
+            || name.endsWith(".db")
+            || name.endsWith(".sqlite")
+            || name.endsWith(".sqlite3")
+            || name.endsWith(".h2.db")
+            || name.endsWith(".mv.db")
+            || name.endsWith(".ldb");
     }
 
     private static boolean isPluginExcluded(Path pluginsRoot, Path path) {
@@ -297,15 +358,8 @@ public final class WorldFileScanner {
         }
         String fileName = path.getFileName().toString().toLowerCase(Locale.ROOT);
         return fileName.endsWith(".jar")
-            || fileName.endsWith(".db")
-            || fileName.endsWith(".sqlite")
-            || fileName.endsWith(".sqlite3")
-            || fileName.endsWith(".h2.db")
-            || fileName.endsWith(".mv.db")
-            || fileName.endsWith(".ldb")
             || fileName.endsWith(".log")
-            || fileName.endsWith(".yml")
-            || fileName.endsWith(".yaml");
+            || fileName.endsWith(".tmp");
     }
 
     private static void addExtraTarget(

@@ -109,6 +109,7 @@ final class UuidBridgeCommand implements CommandExecutor, TabCompleter {
             + ", filesWithChanges=" + result.estimatedChanges().size()
             + ", estimatedReplacements=" + replacements + ".");
         sendCoverage(sender, result.coverage());
+        sendSkippedCoverage(sender, result.coverage());
         if (options.plugins()) {
             send(sender, "Plugin data scanning: enabled.");
         }
@@ -144,6 +145,7 @@ final class UuidBridgeCommand implements CommandExecutor, TabCompleter {
             + ", conflicts: " + plan.conflicts().size()
             + ", missing: " + plan.missingMappings().size());
         sendCoverage(sender, plan.coverage());
+        sendSkippedCoverage(sender, plan.coverage());
         send(sender, "Plugin data scanning: " + (plan.pluginTargetsEnabled() ? "enabled" : "disabled") + ".");
         if (plan.singleplayerPlayerCopy() != null) {
             send(sender, "Singleplayer Player copy planned for " + plan.singleplayerPlayerCopy().name() + ".");
@@ -236,6 +238,25 @@ final class UuidBridgeCommand implements CommandExecutor, TabCompleter {
         send(sender, "Coverage: scanned=" + coverage.scannedFiles()
             + ", skipped=" + coverage.skippedFiles()
             + ", targets=" + coverage.targets().size() + ".");
+    }
+
+    private static void sendSkippedCoverage(CommandSender sender, CoverageReport coverage) {
+        List<String> skipped = coverage.targets().stream()
+            .filter(target -> !target.included())
+            .limit(5)
+            .map(target -> target.path() + ": " + target.skippedReason())
+            .toList();
+        if (skipped.isEmpty()) {
+            return;
+        }
+        send(sender, "Skipped targets:");
+        for (String line : skipped) {
+            send(sender, "- " + line);
+        }
+        long remaining = coverage.skippedFiles() - skipped.size();
+        if (remaining > 0) {
+            send(sender, "... and " + remaining + " more skipped target(s).");
+        }
     }
 
     private static void send(CommandSender sender, String message) {

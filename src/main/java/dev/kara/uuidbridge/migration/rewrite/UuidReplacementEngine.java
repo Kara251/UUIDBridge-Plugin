@@ -21,15 +21,9 @@ public final class UuidReplacementEngine {
         byte[] current = content;
         long replacements = 0;
         for (UuidMapping mapping : mappings) {
-            ReplaceResult text = replaceAll(current, mapping.fromUuid().toString().getBytes(StandardCharsets.UTF_8),
-                mapping.toUuid().toString().getBytes(StandardCharsets.UTF_8));
+            TextReplaceResult text = replaceText(current, mapping);
             current = text.content();
             replacements += text.replacements();
-
-            ReplaceResult noDash = replaceAll(current, undashed(mapping.fromUuid()).getBytes(StandardCharsets.UTF_8),
-                undashed(mapping.toUuid()).getBytes(StandardCharsets.UTF_8));
-            current = noDash.content();
-            replacements += noDash.replacements();
 
             ReplaceResult longPair = replaceAll(current, UuidBinaryCodec.asLongPair(mapping.fromUuid()),
                 UuidBinaryCodec.asLongPair(mapping.toUuid()));
@@ -40,6 +34,17 @@ public final class UuidReplacementEngine {
                 UuidBinaryCodec.asIntArray(mapping.toUuid()));
             current = intArray.content();
             replacements += intArray.replacements();
+        }
+        return new FileChangeResult(replacements, current);
+    }
+
+    public static FileChangeResult rewriteText(byte[] content, List<UuidMapping> mappings) {
+        byte[] current = content;
+        long replacements = 0;
+        for (UuidMapping mapping : mappings) {
+            TextReplaceResult text = replaceText(current, mapping);
+            current = text.content();
+            replacements += text.replacements();
         }
         return new FileChangeResult(replacements, current);
     }
@@ -78,6 +83,14 @@ public final class UuidReplacementEngine {
         return uuid.toString().replace("-", "");
     }
 
+    private static TextReplaceResult replaceText(byte[] content, UuidMapping mapping) {
+        ReplaceResult dashed = replaceAll(content, mapping.fromUuid().toString().getBytes(StandardCharsets.UTF_8),
+            mapping.toUuid().toString().getBytes(StandardCharsets.UTF_8));
+        ReplaceResult noDash = replaceAll(dashed.content(), undashed(mapping.fromUuid()).getBytes(StandardCharsets.UTF_8),
+            undashed(mapping.toUuid()).getBytes(StandardCharsets.UTF_8));
+        return new TextReplaceResult(dashed.replacements() + noDash.replacements(), noDash.content());
+    }
+
     static ReplaceResult replaceAll(byte[] content, byte[] from, byte[] to) {
         if (from.length != to.length) {
             throw new IllegalArgumentException("UUID replacement patterns must be equal length");
@@ -112,5 +125,8 @@ public final class UuidReplacementEngine {
     }
 
     record ReplaceResult(long replacements, byte[] content) {
+    }
+
+    private record TextReplaceResult(long replacements, byte[] content) {
     }
 }

@@ -274,6 +274,67 @@ class MigrationIntegrationTest {
         assertTrue(Files.exists(worldDir.resolve("playerdata").resolve(OFFLINE_UUID + ".dat")));
     }
 
+    @Test
+    void migratesPluginFixtureAndRollsBack() throws Exception {
+        UuidBridgePaths paths = fixture(ONLINE_UUID, ONLINE_UUID, Optional.empty());
+        Path essentials = paths.gameDir().resolve("plugins/Essentials/userdata").resolve(ONLINE_UUID + ".yml");
+        Path residence = paths.gameDir().resolve("plugins/Residence/Save/residences.yml");
+        Path unknownYaml = paths.gameDir().resolve("plugins/Claims/data/config.yml");
+        Path database = paths.gameDir().resolve("plugins/LuckPerms/luckperms-h2.mv.db");
+        Files.createDirectories(essentials.getParent());
+        Files.createDirectories(residence.getParent());
+        Files.createDirectories(unknownYaml.getParent());
+        Files.createDirectories(database.getParent());
+        Files.writeString(essentials, """
+            # user %s
+            uuid: "%s"
+            compact: %s
+            money: '42.0'
+            """.formatted(ONLINE_UUID, ONLINE_UUID, ONLINE_UUID.toString().replace("-", "")));
+        Files.writeString(residence, """
+            residences:
+              spawn:
+                owner: "%s"
+                trusted:
+                - "%s"
+            """.formatted(ONLINE_UUID, OTHER_UUID));
+        Files.writeString(unknownYaml, "owner: \"%s\"\n".formatted(ONLINE_UUID));
+        Files.writeString(database, ONLINE_UUID.toString());
+
+        MigrationService service = new MigrationService();
+        MigrationPlan plan = service.createPlan(paths, MigrationDirection.ONLINE_TO_OFFLINE,
+            Optional.empty(), Optional.empty(), Optional.empty(), true);
+
+        assertTrue(plan.canApply());
+        assertTrue(plan.pluginTargetsEnabled());
+        assertTrue(plan.estimatedChanges().stream().anyMatch(change -> change.action().equals("plugin-rename")));
+        assertTrue(plan.coverage().targets().stream().anyMatch(target ->
+            target.path().contains("Claims/data/config.yml") && target.skippedReason() != null));
+        service.markPending(paths, plan.id());
+        MigrationReport report = service.executePending(paths);
+
+        Path migratedEssentials = essentials.resolveSibling(OFFLINE_UUID + ".yml");
+        assertTrue(report.successful());
+        assertTrue(Files.exists(migratedEssentials));
+        assertFalse(Files.exists(essentials));
+        assertContains(migratedEssentials, OFFLINE_UUID.toString());
+        assertContains(migratedEssentials, OFFLINE_UUID.toString().replace("-", ""));
+        assertContains(residence, OFFLINE_UUID.toString());
+        assertContains(residence, OTHER_UUID.toString());
+        assertContains(unknownYaml, ONLINE_UUID.toString());
+        assertContains(database, ONLINE_UUID.toString());
+        assertTrue(report.skipped().stream().anyMatch(value -> value.contains("unsupported plugin storage")));
+
+        service.markPendingRollback(paths, plan.id(), "test");
+        MigrationReport rollback = service.executePending(paths);
+
+        assertTrue(rollback.successful());
+        assertTrue(Files.exists(essentials));
+        assertFalse(Files.exists(migratedEssentials));
+        assertContains(essentials, ONLINE_UUID.toString());
+        assertContains(residence, ONLINE_UUID.toString());
+    }
+
     private UuidBridgePaths fixture(UUID fileUuid, UUID contentUuid, Optional<Path> mappingFile) throws Exception {
         Path gameDir = tempDir.resolve("server");
         Path worldDir = gameDir.resolve("world");

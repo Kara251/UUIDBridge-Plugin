@@ -139,6 +139,8 @@ class WorldFileScannerTest {
         touch(gameDir.resolve("plugins/Claims/data/owner.dat"));
         touch(gameDir.resolve("plugins/Claims/data/r.0.0.mca"));
         touch(gameDir.resolve("plugins/Claims/cache/ignored.json"));
+        touch(gameDir.resolve("plugins/Essentials/userdata/11111111-2222-3333-4444-555555555555.yml"));
+        touch(gameDir.resolve("plugins/Residence/Save/residences.yml"));
         touch(gameDir.resolve("plugins/Claims/data/config.yml"));
         touch(gameDir.resolve("plugins/Claims/data/store.sqlite"));
         touch(gameDir.resolve("plugins/Claims/data/plugin.jar"));
@@ -154,10 +156,25 @@ class WorldFileScannerTest {
         assertTrue(pluginLabels.contains("game:plugins/Claims/data/owners.json"));
         assertTrue(pluginLabels.contains("game:plugins/Claims/data/owner.dat"));
         assertTrue(pluginLabels.contains("game:plugins/Claims/data/r.0.0.mca"));
-        assertTrue(pluginLabels.stream().noneMatch(label -> label.contains("/cache/")));
-        assertTrue(pluginLabels.stream().noneMatch(label -> label.endsWith(".yml")));
-        assertTrue(pluginLabels.stream().noneMatch(label -> label.endsWith(".sqlite")));
+        assertTrue(pluginLabels.contains("game:plugins/Essentials/userdata/11111111-2222-3333-4444-555555555555.yml"));
+        assertTrue(pluginLabels.contains("game:plugins/Residence/Save/residences.yml"));
+        assertTrue(pluginLabels.contains("game:plugins/Claims/data/config.yml"));
+        assertTrue(pluginLabels.contains("game:plugins/Claims/data/store.sqlite"));
+        assertTrue(pluginLabels.contains("game:plugins/Claims/cache/ignored.json"));
         assertTrue(pluginLabels.stream().noneMatch(label -> label.endsWith(".jar")));
+
+        var unsupported = WorldFileScanner.discoverTargets(paths, Optional.empty(), true).stream()
+            .filter(file -> file.adapter().equals(DataAdapters.UNSUPPORTED))
+            .map(file -> MigrationPlanner.label(paths, file.path()).replace('\\', '/'))
+            .collect(Collectors.toSet());
+        assertTrue(unsupported.contains("game:plugins/Claims/data/config.yml"));
+        assertTrue(unsupported.contains("game:plugins/Claims/data/store.sqlite"));
+        assertTrue(unsupported.contains("game:plugins/Claims/cache/ignored.json"));
+
+        var renameFiles = WorldFileScanner.pluginUuidFiles(paths).stream()
+            .map(file -> MigrationPlanner.label(paths, file).replace('\\', '/'))
+            .collect(Collectors.toSet());
+        assertTrue(renameFiles.contains("game:plugins/Essentials/userdata/11111111-2222-3333-4444-555555555555.yml"));
     }
 
     private static void touch(Path path) throws Exception {

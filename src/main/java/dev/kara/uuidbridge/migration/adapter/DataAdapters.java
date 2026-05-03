@@ -23,14 +23,18 @@ public final class DataAdapters {
     public static final String NBT_GZIP = "nbt-gzip";
     public static final String NBT_PLAIN = "nbt-plain";
     public static final String REGION = "region";
+    public static final String YAML_TEXT = "yaml-text";
     public static final String BINARY = "binary";
+    public static final String UNSUPPORTED = "unsupported";
 
     private static final Map<String, DataAdapter> BY_ID = Map.of(
         JSON, new JsonAdapter(),
         NBT_GZIP, new GzipNbtAdapter(),
         NBT_PLAIN, new PlainNbtAdapter(),
         REGION, new RegionAdapter(),
-        BINARY, new BinaryAdapter()
+        YAML_TEXT, new YamlTextAdapter(),
+        BINARY, new BinaryAdapter(),
+        UNSUPPORTED, new UnsupportedAdapter()
     );
 
     private DataAdapters() {
@@ -47,6 +51,9 @@ public final class DataAdapters {
         }
         if (name.endsWith(".json")) {
             return BY_ID.get(JSON);
+        }
+        if (name.endsWith(".yml") || name.endsWith(".yaml")) {
+            return BY_ID.get(YAML_TEXT);
         }
         if (name.endsWith(".dat") || name.endsWith(".dat_old")) {
             return BY_ID.get(NBT_GZIP);
@@ -67,6 +74,9 @@ public final class DataAdapters {
         }
         if (normalized.equals("plain-nbt")) {
             return Optional.of(NBT_PLAIN);
+        }
+        if (normalized.equals("yaml") || normalized.equals("yml")) {
+            return Optional.of(YAML_TEXT);
         }
         if (normalized.equals(BINARY)) {
             return Optional.empty();
@@ -228,6 +238,61 @@ public final class DataAdapters {
         @Override
         public FileChangeResult rewrite(byte[] content, List<UuidMapping> mappings) {
             return UuidReplacementEngine.rewritePlain(content, mappings);
+        }
+    }
+
+    private static final class YamlTextAdapter implements DataAdapter {
+        @Override
+        public String id() {
+            return YAML_TEXT;
+        }
+
+        @Override
+        public String format() {
+            return YAML_TEXT;
+        }
+
+        @Override
+        public String risk() {
+            return "exact-text";
+        }
+
+        @Override
+        public boolean supports(Path file) {
+            String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+            return name.endsWith(".yml") || name.endsWith(".yaml");
+        }
+
+        @Override
+        public FileChangeResult rewrite(byte[] content, List<UuidMapping> mappings) {
+            return UuidReplacementEngine.rewriteText(content, mappings);
+        }
+    }
+
+    private static final class UnsupportedAdapter implements DataAdapter {
+        @Override
+        public String id() {
+            return UNSUPPORTED;
+        }
+
+        @Override
+        public String format() {
+            return UNSUPPORTED;
+        }
+
+        @Override
+        public String risk() {
+            return "unsupported-report-only";
+        }
+
+        @Override
+        public boolean supports(Path file) {
+            return true;
+        }
+
+        @Override
+        public FileChangeResult rewrite(byte[] content, List<UuidMapping> mappings) {
+            return new FileChangeResult(0, content);
         }
     }
 }

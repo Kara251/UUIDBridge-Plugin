@@ -44,4 +44,24 @@ class DataAdaptersTest {
         assertTrue(rewritten.contains("\"Name\": \"Alice\""));
         assertTrue(rewritten.contains(OFFLINE.toString()));
     }
+
+    @Test
+    void yamlTextAdapterRewritesExactUuidTextOnly() throws Exception {
+        String yaml = """
+            # owner 11111111-2222-3333-4444-555555555555
+            uuid: "11111111-2222-3333-4444-555555555555"
+            compact: 11111111222233334444555555555555
+            name: Alice
+            """;
+
+        FileChangeResult result = DataAdapters.byId(DataAdapters.YAML_TEXT).orElseThrow()
+            .rewrite(yaml.getBytes(StandardCharsets.UTF_8), List.of(MAPPING));
+
+        String rewritten = new String(result.content(), StandardCharsets.UTF_8);
+        assertEquals(3, result.replacements());
+        assertTrue(rewritten.contains("# owner " + OFFLINE));
+        assertTrue(rewritten.contains("uuid: \"" + OFFLINE + "\""));
+        assertTrue(rewritten.contains("compact: " + OFFLINE.toString().replace("-", "")));
+        assertTrue(rewritten.contains("name: Alice"));
+    }
 }
