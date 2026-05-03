@@ -1,0 +1,57 @@
+plugins {
+    id "java"
+    id "com.gradleup.shadow" version "9.3.2"
+}
+
+group = maven_group
+version = plugin_version
+
+base {
+    archivesName = archives_base_name
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(java_version as int)
+    }
+    withSourcesJar()
+}
+
+dependencies {
+    compileOnly "io.papermc.paper:paper-api:${paper_api_version}"
+    implementation "com.google.code.gson:gson:${gson_version}"
+
+    testImplementation platform("org.junit:junit-bom:${junit_version}")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = "UTF-8"
+    options.release = java_version as int
+}
+
+processResources {
+    inputs.property "version", plugin_version
+    filesMatching("plugin.yml") {
+        expand(version: plugin_version)
+    }
+}
+
+shadowJar {
+    archiveClassifier = null
+    relocate "com.google.gson", "dev.kara.uuidbridge.plugin.libs.gson"
+}
+
+jar {
+    enabled = false
+    dependsOn shadowJar
+}
+
+assemble {
+    dependsOn shadowJar
+}
+
+test {
+    useJUnitPlatform()
+}

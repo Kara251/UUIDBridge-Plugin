@@ -1,0 +1,16 @@
+name: UUIDBridge
+version: ${version}
+main: dev.kara.uuidbridge.plugin.UuidBridgePlugin
+api-version: '1.21.1'
+load: STARTUP
+description: Server-side UUID migration bridge for Paper and Bukkit servers.
+author: kara
+commands:
+  uuidbridge:
+    description: Scan, plan, apply, and rollback UUIDBridge migrations.
+    usage: /uuidbridge <scan|plan|apply|status|rollback|cancel>
+    permission: uuidbridge.admin
+permissions:
+  uuidbridge.admin:
+    description: Allows UUIDBridge migration administration.
+    default: op
