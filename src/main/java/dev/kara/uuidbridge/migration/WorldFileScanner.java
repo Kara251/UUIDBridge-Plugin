@@ -292,11 +292,12 @@ public final class WorldFileScanner {
         }
         Optional<PluginTargetPresets.Target> preset = PluginTargetPresets.targetFor(paths.gameDir(), display);
         if (preset.isPresent()) {
-            add(result, display, preset.get().adapter(), "plugin-preset:" + preset.get().name(), false);
+            String source = preset.get().writable() ? "plugin-preset:" : "plugin-preset-candidate:";
+            add(result, display, preset.get().adapter(), source + preset.get().name(), false);
             return;
         }
         if (isPluginSupportedDataFile(file)) {
-            add(result, display, DataAdapters.forFile(file).id(), "plugins", false);
+            add(result, display, DataAdapters.UNSUPPORTED, "plugins-unsupported", false);
             return;
         }
         if (isPluginUnsupportedReportFile(file)) {

@@ -84,11 +84,54 @@ public final class UuidReplacementEngine {
     }
 
     private static TextReplaceResult replaceText(byte[] content, UuidMapping mapping) {
-        ReplaceResult dashed = replaceAll(content, mapping.fromUuid().toString().getBytes(StandardCharsets.UTF_8),
-            mapping.toUuid().toString().getBytes(StandardCharsets.UTF_8));
-        ReplaceResult noDash = replaceAll(dashed.content(), undashed(mapping.fromUuid()).getBytes(StandardCharsets.UTF_8),
-            undashed(mapping.toUuid()).getBytes(StandardCharsets.UTF_8));
+        ReplaceResult dashed = replaceUuidText(content, mapping.fromUuid().toString().getBytes(StandardCharsets.UTF_8),
+            mapping.toUuid().toString().getBytes(StandardCharsets.UTF_8), true);
+        ReplaceResult noDash = replaceUuidText(dashed.content(), undashed(mapping.fromUuid()).getBytes(StandardCharsets.UTF_8),
+            undashed(mapping.toUuid()).getBytes(StandardCharsets.UTF_8), false);
         return new TextReplaceResult(dashed.replacements() + noDash.replacements(), noDash.content());
+    }
+
+    private static ReplaceResult replaceUuidText(byte[] content, byte[] from, byte[] to, boolean dashed) {
+        if (from.length != to.length) {
+            throw new IllegalArgumentException("UUID replacement patterns must be equal length");
+        }
+        if (content.length < from.length) {
+            return new ReplaceResult(0, content);
+        }
+        List<Integer> matches = new ArrayList<>();
+        for (int i = 0; i <= content.length - from.length; i++) {
+            if (matchesAt(content, from, i) && hasUuidBoundary(content, i, from.length, dashed)) {
+                matches.add(i);
+                i += from.length - 1;
+            }
+        }
+        if (matches.isEmpty()) {
+            return new ReplaceResult(0, content);
+        }
+        byte[] copy = content.clone();
+        for (int offset : matches) {
+            System.arraycopy(to, 0, copy, offset, to.length);
+        }
+        return new ReplaceResult(matches.size(), copy);
+    }
+
+    private static boolean hasUuidBoundary(byte[] content, int offset, int length, boolean dashed) {
+        return isUuidBoundary(content, offset - 1, dashed)
+            && isUuidBoundary(content, offset + length, dashed);
+    }
+
+    private static boolean isUuidBoundary(byte[] content, int index, boolean dashed) {
+        if (index < 0 || index >= content.length) {
+            return true;
+        }
+        byte value = content[index];
+        return !isHex(value) && (!dashed || value != '-');
+    }
+
+    private static boolean isHex(byte value) {
+        return (value >= '0' && value <= '9')
+            || (value >= 'a' && value <= 'f')
+            || (value >= 'A' && value <= 'F');
     }
 
     static ReplaceResult replaceAll(byte[] content, byte[] from, byte[] to) {

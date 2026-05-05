@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DataAdaptersTest {
@@ -63,5 +64,24 @@ class DataAdaptersTest {
         assertTrue(rewritten.contains("uuid: \"" + OFFLINE + "\""));
         assertTrue(rewritten.contains("compact: " + OFFLINE.toString().replace("-", "")));
         assertTrue(rewritten.contains("name: Alice"));
+    }
+
+    @Test
+    void yamlTextAdapterDoesNotRewriteUuidEmbeddedInLongerTokens() throws Exception {
+        String yaml = """
+            dashed: a11111111-2222-3333-4444-555555555555b
+            compact: abc11111111222233334444555555555555def
+            standalone: 11111111-2222-3333-4444-555555555555
+            """;
+
+        FileChangeResult result = DataAdapters.byId(DataAdapters.YAML_TEXT).orElseThrow()
+            .rewrite(yaml.getBytes(StandardCharsets.UTF_8), List.of(MAPPING));
+
+        String rewritten = new String(result.content(), StandardCharsets.UTF_8);
+        assertEquals(1, result.replacements());
+        assertTrue(rewritten.contains("a11111111-2222-3333-4444-555555555555b"));
+        assertTrue(rewritten.contains("abc11111111222233334444555555555555def"));
+        assertTrue(rewritten.contains("standalone: " + OFFLINE));
+        assertFalse(rewritten.contains("standalone: " + ONLINE + "\n"));
     }
 }

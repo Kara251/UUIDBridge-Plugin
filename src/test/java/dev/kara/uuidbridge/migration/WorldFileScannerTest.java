@@ -140,6 +140,7 @@ class WorldFileScannerTest {
         touch(gameDir.resolve("plugins/Claims/data/r.0.0.mca"));
         touch(gameDir.resolve("plugins/Claims/cache/ignored.json"));
         touch(gameDir.resolve("plugins/Essentials/userdata/11111111-2222-3333-4444-555555555555.yml"));
+        touch(gameDir.resolve("plugins/LuckPerms/yaml-storage/users/11111111222233334444555555555555.yml"));
         touch(gameDir.resolve("plugins/Residence/Save/residences.yml"));
         touch(gameDir.resolve("plugins/Claims/data/config.yml"));
         touch(gameDir.resolve("plugins/Claims/data/store.sqlite"));
@@ -168,13 +169,19 @@ class WorldFileScannerTest {
             .map(file -> MigrationPlanner.label(paths, file.path()).replace('\\', '/'))
             .collect(Collectors.toSet());
         assertTrue(unsupported.contains("game:plugins/Claims/data/config.yml"));
+        assertTrue(unsupported.contains("game:plugins/Claims/data/owners.json"));
+        assertTrue(unsupported.contains("game:plugins/Claims/data/owner.dat"));
+        assertTrue(unsupported.contains("game:plugins/Claims/data/r.0.0.mca"));
         assertTrue(unsupported.contains("game:plugins/Claims/data/store.sqlite"));
         assertTrue(unsupported.contains("game:plugins/Claims/cache/ignored.json"));
+        assertTrue(unsupported.contains("game:plugins/Residence/Save/residences.yml"));
 
         var renameFiles = WorldFileScanner.pluginUuidFiles(paths).stream()
             .map(file -> MigrationPlanner.label(paths, file).replace('\\', '/'))
             .collect(Collectors.toSet());
         assertTrue(renameFiles.contains("game:plugins/Essentials/userdata/11111111-2222-3333-4444-555555555555.yml"));
+        assertTrue(renameFiles.contains("game:plugins/LuckPerms/yaml-storage/users/11111111222233334444555555555555.yml"));
+        assertTrue(renameFiles.stream().noneMatch(label -> label.contains("Residence")));
     }
 
     private static void touch(Path path) throws Exception {

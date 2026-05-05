@@ -228,6 +228,10 @@ public final class MigrationPlanner {
             if (mapping.fromUuid().toString().equals(stem)) {
                 return mapping.toUuid() + extension;
             }
+            String undashed = mapping.fromUuid().toString().replace("-", "");
+            if (undashed.equalsIgnoreCase(stem)) {
+                return mapping.toUuid().toString().replace("-", "") + extension;
+            }
         }
         return null;
     }

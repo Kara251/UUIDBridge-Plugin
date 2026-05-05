@@ -1,3 +1,8 @@
+import groovy.json.JsonSlurper
+import java.nio.charset.StandardCharsets
+import java.util.Collections
+import java.util.concurrent.TimeUnit
+
 plugins {
     id "java"
     id "com.gradleup.shadow" version "9.3.2"
@@ -54,4 +59,330 @@ assemble {
 
 test {
     useJUnitPlatform()
+}
+
+tasks.register("smokePaperServer") {
+    group = "verification"
+    description = "Starts a temporary Paper 1.21.1 server and verifies UUIDBridge startup, commands, pending apply, and fail-closed behavior."
+    dependsOn shadowJar
+
+    doLast {
+        String paperVersion = "1.21.1"
+        File smokeRoot = layout.buildDirectory.dir("smokePaperServer").get().asFile
+        File cacheDir = layout.buildDirectory.dir("paperCache").get().asFile
+        File runtimeSeed = layout.buildDirectory.dir("paperRuntimeSeed").get().asFile
+        File pluginJar = tasks.shadowJar.archiveFile.get().asFile
+        String javaExe = javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(java_version as int)
+        }.get().executablePath.asFile.absolutePath
+
+        project.delete(smokeRoot)
+        smokeRoot.mkdirs()
+        cacheDir.mkdirs()
+        runtimeSeed.mkdirs()
+
+        File paperJar = downloadPaperJar(paperVersion, cacheDir)
+        smokeStatusServer(smokeRoot, runtimeSeed, paperJar, pluginJar, javaExe)
+        smokePendingApply(smokeRoot, runtimeSeed, paperJar, pluginJar, javaExe, false)
+        smokePendingApply(smokeRoot, runtimeSeed, paperJar, pluginJar, javaExe, true)
+    }
+}
+
+private File downloadPaperJar(String paperVersion, File cacheDir) {
+    URL buildsUrl = new URL("https://api.papermc.io/v2/projects/paper/versions/${paperVersion}/builds")
+    def metadata = new JsonSlurper().parse(buildsUrl)
+    def stableBuilds = metadata.builds.findAll { String.valueOf(it.channel).equalsIgnoreCase("stable") }
+    def build = (stableBuilds.isEmpty() ? metadata.builds : stableBuilds).max { it.build }
+    if (build == null) {
+        throw new GradleException("No default Paper build found for ${paperVersion}")
+    }
+    String fileName = build.downloads.application.name
+    File paperJar = new File(cacheDir, fileName)
+    if (paperJar.isFile()) {
+        return paperJar
+    }
+    URL downloadUrl = new URL("https://api.papermc.io/v2/projects/paper/versions/${paperVersion}/builds/${build.build}/downloads/${fileName}")
+    logger.lifecycle("Downloading Paper ${paperVersion} build ${build.build}")
+    paperJar.withOutputStream { output ->
+        downloadUrl.withInputStream { input -> output << input }
+    }
+    return paperJar
+}
+
+private void smokeStatusServer(File smokeRoot, File runtimeSeed, File paperJar, File pluginJar, String javaExe) {
+    File serverDir = new File(smokeRoot, "status")
+    int attempts = 3
+    for (int attempt = 1; attempt <= attempts; attempt++) {
+        prepareServer(serverDir, pluginJar)
+        copyPaperRuntimeCache(runtimeSeed, serverDir)
+        try {
+            withPaperServer(serverDir, paperJar, javaExe, "status", false) { session ->
+                session.waitForLine({ it.contains("Done (") }, 600, "server ready")
+                session.send("uuidbridge status")
+                session.waitForLine({ it.contains("UUIDBridge pending: none") }, 30, "UUIDBridge status output")
+                session.send("stop")
+                session.expectExit(60, true)
+            }
+            copyPaperRuntimeCache(serverDir, runtimeSeed)
+            return
+        } catch (GradleException exception) {
+            if (attempt == attempts || !looksLikeDownloadFailure(exception.message)) {
+                throw exception
+            }
+            logger.lifecycle("Retrying Paper smoke status startup after download failure (${attempt}/${attempts})")
+        }
+    }
+}
+
+private void smokePendingApply(File smokeRoot, File runtimeSeed, File paperJar, File pluginJar, String javaExe, boolean failClosed) {
+    File serverDir = new File(smokeRoot, failClosed ? "pending-failure" : "pending-success")
+    UUID online = UUID.fromString("11111111-2222-3333-4444-555555555555")
+    UUID offline = UUID.nameUUIDFromBytes("OfflinePlayer:Alice".getBytes(StandardCharsets.UTF_8))
+    prepareServer(serverDir, pluginJar)
+    copyPaperRuntimeCache(runtimeSeed, serverDir)
+    prepareMigrationFixture(serverDir, online)
+
+    String planId
+    withPaperServer(serverDir, paperJar, javaExe, failClosed ? "failure-plan" : "success-plan", false) { session ->
+        session.waitForLine({ it.contains("Done (") }, 600, "server ready")
+        session.send("uuidbridge plan online-to-offline --mapping mapping.csv --plugins")
+        session.waitForLine({ it.contains("UUIDBridge plan created:") }, 60, "plan creation")
+        planId = session.latestLine({ it.contains("UUIDBridge plan created:") })
+            .substring(session.latestLine({ it.contains("UUIDBridge plan created:") }).lastIndexOf(":") + 1)
+            .trim()
+        session.send("uuidbridge apply ${planId} --confirm")
+        session.waitForLine({ it.contains("UUIDBridge plan marked pending: ${planId}") }, 30, "pending apply marker")
+        session.send("stop")
+        session.expectExit(60, true)
+    }
+
+    if (failClosed) {
+        new File(serverDir, "plugins/Essentials/userdata/${offline}.yml").withWriter("UTF-8") { writer ->
+            writer.write("conflicting target")
+        }
+        withPaperServer(serverDir, paperJar, javaExe, "failure-apply", true) { session ->
+            session.expectExit(120, false)
+            if (session.anyLine { it.contains("Done (") }) {
+                throw new GradleException("Paper reached ready state after a failed pending migration.")
+            }
+            if (!session.anyLine { it.contains("UUIDBridge failed during startup") }) {
+                throw new GradleException("Pending failure did not log UUIDBridge startup failure.")
+            }
+            if (!new File(serverDir, "uuidbridge/startup-failure.json").isFile()) {
+                throw new GradleException("Pending failure did not write uuidbridge/startup-failure.json.")
+            }
+        }
+        return
+    }
+
+    withPaperServer(serverDir, paperJar, javaExe, "success-apply", false) { session ->
+        session.waitForLine({ it.contains("UUIDBridge pending apply found for ${planId}") }, 120, "pending apply start")
+        session.waitForLine({ it.contains("finished with state APPLIED") }, 120, "pending apply success")
+        session.waitForLine({ it.contains("Done (") }, 600, "server ready after apply")
+        session.send("stop")
+        session.expectExit(60, true)
+    }
+    assertMigratedFixture(serverDir, online, offline)
+}
+
+private boolean looksLikeDownloadFailure(String message) {
+    return message != null
+        && (message.contains("Downloading mojang_")
+            || message.contains("Failed to download")
+            || message.contains("Hash check failed")
+            || message.contains("SSLHandshakeException"))
+}
+
+private void prepareServer(File serverDir, File pluginJar) {
+    project.delete(serverDir)
+    new File(serverDir, "plugins").mkdirs()
+    new File(serverDir, "world/playerdata").mkdirs()
+    new File(serverDir, "eula.txt").text = "eula=true\n"
+    new File(serverDir, "server.properties").text = [
+        "level-name=world",
+        "level-type=minecraft:flat",
+        "online-mode=false",
+        "server-port=0",
+        "allow-nether=false",
+        "spawn-protection=0",
+        "spawn-chunk-radius=0",
+        "view-distance=2",
+        "simulation-distance=2",
+        "enable-command-block=false",
+        "motd=UUIDBridge smoke"
+    ].join("\n") + "\n"
+    new File(serverDir, "bukkit.yml").text = "settings:\n  allow-end: false\n"
+    project.copy {
+        from pluginJar
+        into new File(serverDir, "plugins")
+    }
+}
+
+private void copyPaperRuntimeCache(File sourceServer, File targetServer) {
+    for (String name : ["cache", "versions"]) {
+        File source = new File(sourceServer, name)
+        if (source.exists()) {
+            project.copy {
+                from source
+                into new File(targetServer, name)
+            }
+        }
+    }
+}
+
+private void prepareMigrationFixture(File serverDir, UUID online) {
+    String compact = online.toString().replace("-", "")
+    writeText(new File(serverDir, "usercache.json"), """[
+  {"name":"Alice","uuid":"${online}"}
+]
+""")
+    writeText(new File(serverDir, "mapping.csv"), "name,onlineUuid,offlineUuid\nAlice,${online},${UUID.nameUUIDFromBytes("OfflinePlayer:Alice".getBytes(StandardCharsets.UTF_8))}\n")
+    writeText(new File(serverDir, "whitelist.json"), """[
+  {"name":"Alice","uuid":"${online}"}
+]
+""")
+    writeText(new File(serverDir, "plugins/Essentials/userdata/${online}.yml"), """uuid: "${online}"
+compact: ${compact}
+""")
+    writeText(new File(serverDir, "plugins/Claims/data/owners.json"), """{"owner":"${online}"}""")
+}
+
+private void assertMigratedFixture(File serverDir, UUID online, UUID offline) {
+    File migratedEssentials = new File(serverDir, "plugins/Essentials/userdata/${offline}.yml")
+    File oldEssentials = new File(serverDir, "plugins/Essentials/userdata/${online}.yml")
+    File unknownPluginJson = new File(serverDir, "plugins/Claims/data/owners.json")
+    if (!migratedEssentials.isFile() || oldEssentials.exists()) {
+        throw new GradleException("EssentialsX userdata was not migrated and renamed.")
+    }
+    if (!migratedEssentials.getText("UTF-8").contains(offline.toString())) {
+        throw new GradleException("EssentialsX userdata did not contain the migrated UUID.")
+    }
+    if (!unknownPluginJson.getText("UTF-8").contains(online.toString())) {
+        throw new GradleException("Unknown plugin JSON was modified; it should be report-only.")
+    }
+}
+
+private void writeText(File file, String text) {
+    file.parentFile.mkdirs()
+    file.setText(text, "UTF-8")
+}
+
+private void withPaperServer(File serverDir, File paperJar, String javaExe, String label, boolean allowNonZero, Closure body) {
+    def process = new ProcessBuilder(javaExe, "-Xms512M", "-Xmx1G", "-jar", paperJar.absolutePath, "nogui")
+        .directory(serverDir)
+        .redirectErrorStream(true)
+        .start()
+    def session = new PaperSession(label, process, logger)
+    Throwable failure = null
+    try {
+        body.call(session)
+    } catch (Throwable throwable) {
+        failure = throwable
+        throw throwable
+    } finally {
+        if (failure == null) {
+            session.close(allowNonZero)
+        } else {
+            session.destroy()
+        }
+    }
+}
+
+class PaperSession implements AutoCloseable {
+    private final String label
+    private final Process process
+    private final Object logger
+    private final List<String> lines = Collections.synchronizedList(new ArrayList<String>())
+    private final Thread reader
+
+    PaperSession(String label, Process process, Object logger) {
+        this.label = label
+        this.process = process
+        this.logger = logger
+        this.reader = Thread.start("paper-smoke-${label}") {
+            process.inputStream.withReader("UTF-8") { input ->
+                input.eachLine { line ->
+                    lines.add(line)
+                    logger.lifecycle("[paper:${label}] ${line}")
+                }
+            }
+        }
+    }
+
+    void send(String command) {
+        process.outputStream.write((command + "\n").getBytes(StandardCharsets.UTF_8))
+        process.outputStream.flush()
+    }
+
+    void waitForLine(Closure<Boolean> predicate, int timeoutSeconds, String description) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+        while (System.nanoTime() < deadline) {
+            if (anyLine(predicate)) {
+                return
+            }
+            if (!process.isAlive() && !anyLine(predicate)) {
+                throw new GradleException("Paper exited before ${description}. Recent output:\n" + tail())
+            }
+            Thread.sleep(250)
+        }
+        throw new GradleException("Timed out waiting for ${description}. Recent output:\n" + tail())
+    }
+
+    String latestLine(Closure<Boolean> predicate) {
+        synchronized (lines) {
+            return lines.findAll(predicate).last()
+        }
+    }
+
+    boolean anyLine(Closure<Boolean> predicate) {
+        synchronized (lines) {
+            return lines.any(predicate)
+        }
+    }
+
+    void expectExit(int timeoutSeconds, boolean requireZero) {
+        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+            process.destroy()
+            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+            }
+            throw new GradleException("Paper did not stop within ${timeoutSeconds}s. Recent output:\n" + tail())
+        }
+        reader.join(TimeUnit.SECONDS.toMillis(10))
+        if (requireZero && process.exitValue() != 0) {
+            throw new GradleException("Paper exited with ${process.exitValue()}. Recent output:\n" + tail())
+        }
+    }
+
+    @Override
+    void close() {
+        close(false)
+    }
+
+    void close(boolean allowNonZero) {
+        if (process.isAlive()) {
+            try {
+                send("stop")
+                expectExit(60, !allowNonZero)
+            } catch (Exception exception) {
+                process.destroyForcibly()
+                throw exception
+            }
+        }
+    }
+
+    void destroy() {
+        if (process.isAlive()) {
+            process.destroy()
+            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+            }
+        }
+    }
+
+    private String tail() {
+        synchronized (lines) {
+            return lines.drop(Math.max(0, lines.size() - 40)).join("\n")
+        }
+    }
 }

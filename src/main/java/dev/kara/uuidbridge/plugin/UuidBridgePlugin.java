@@ -17,6 +17,7 @@ public final class UuidBridgePlugin extends JavaPlugin {
             PendingMigrationRunner.runIfPresent(paths, getLogger());
         } catch (IOException | RuntimeException exception) {
             getLogger().severe("UUIDBridge failed during startup: " + message(exception));
+            requestServerShutdown(exception);
             throw new IllegalStateException("UUIDBridge startup failed", exception);
         }
     }
@@ -42,7 +43,30 @@ public final class UuidBridgePlugin extends JavaPlugin {
     }
 
     private Path serverRoot() {
-        return getServer().getWorldContainer().toPath();
+        return Path.of("").toAbsolutePath().normalize();
+    }
+
+    private void requestServerShutdown(Throwable original) {
+        try {
+            getLogger().severe("UUIDBridge is shutting down the server to avoid using partially migrated data.");
+            getServer().shutdown();
+            forceExitSoon();
+        } catch (RuntimeException shutdownException) {
+            original.addSuppressed(shutdownException);
+        }
+    }
+
+    private static void forceExitSoon() {
+        Thread exitThread = new Thread(() -> {
+            try {
+                Thread.sleep(750L);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            }
+            Runtime.getRuntime().halt(1);
+        }, "UUIDBridge fail-closed exit");
+        exitThread.setDaemon(false);
+        exitThread.start();
     }
 
     private static String message(Throwable throwable) {

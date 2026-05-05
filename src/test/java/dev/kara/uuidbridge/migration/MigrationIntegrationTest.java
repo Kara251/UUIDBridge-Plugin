@@ -15,6 +15,7 @@ import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.logging.Logger;
 import java.util.zip.DeflaterOutputStream;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
@@ -138,6 +139,23 @@ class MigrationIntegrationTest {
         assertContains(paths.gameDir().resolve("whitelist.json"), ONLINE_UUID.toString());
         BackupManifest manifest = JsonCodecs.read(paths.backupPath(plan.id()).resolve("manifest.json"), BackupManifest.class);
         assertFalse(manifest.complete());
+    }
+
+    @Test
+    void pendingRunnerWritesStartupFailureMarkerWhenApplyFails() throws Exception {
+        UuidBridgePaths paths = fixture(ONLINE_UUID, ONLINE_UUID, Optional.empty());
+        MigrationService service = new MigrationService();
+        MigrationPlan plan = service.createPlan(paths, MigrationDirection.ONLINE_TO_OFFLINE, Optional.empty());
+
+        service.markPending(paths, plan.id());
+        Files.writeString(paths.worldDir().resolve("playerdata").resolve(OFFLINE_UUID + ".dat"), "existing");
+        assertThrows(java.io.IOException.class, () ->
+            PendingMigrationRunner.runIfPresent(paths, Logger.getLogger("uuidbridge-test")));
+        StartupFailure failure = JsonCodecs.read(paths.controlDir().resolve("startup-failure.json"), StartupFailure.class);
+
+        assertEquals("apply", failure.action());
+        assertEquals(plan.id(), failure.planId());
+        assertTrue(failure.message().contains("completed with errors"));
     }
 
     @Test
@@ -278,10 +296,13 @@ class MigrationIntegrationTest {
     void migratesPluginFixtureAndRollsBack() throws Exception {
         UuidBridgePaths paths = fixture(ONLINE_UUID, ONLINE_UUID, Optional.empty());
         Path essentials = paths.gameDir().resolve("plugins/Essentials/userdata").resolve(ONLINE_UUID + ".yml");
+        Path luckPerms = paths.gameDir().resolve("plugins/LuckPerms/yaml-storage/users")
+            .resolve(ONLINE_UUID.toString().replace("-", "") + ".yml");
         Path residence = paths.gameDir().resolve("plugins/Residence/Save/residences.yml");
         Path unknownYaml = paths.gameDir().resolve("plugins/Claims/data/config.yml");
         Path database = paths.gameDir().resolve("plugins/LuckPerms/luckperms-h2.mv.db");
         Files.createDirectories(essentials.getParent());
+        Files.createDirectories(luckPerms.getParent());
         Files.createDirectories(residence.getParent());
         Files.createDirectories(unknownYaml.getParent());
         Files.createDirectories(database.getParent());
@@ -291,6 +312,11 @@ class MigrationIntegrationTest {
             compact: %s
             money: '42.0'
             """.formatted(ONLINE_UUID, ONLINE_UUID, ONLINE_UUID.toString().replace("-", "")));
+        Files.writeString(luckPerms, """
+            uuid: "%s"
+            permissions:
+            - uuidbridge.test
+            """.formatted(ONLINE_UUID));
         Files.writeString(residence, """
             residences:
               spawn:
@@ -314,12 +340,16 @@ class MigrationIntegrationTest {
         MigrationReport report = service.executePending(paths);
 
         Path migratedEssentials = essentials.resolveSibling(OFFLINE_UUID + ".yml");
+        Path migratedLuckPerms = luckPerms.resolveSibling(OFFLINE_UUID.toString().replace("-", "") + ".yml");
         assertTrue(report.successful());
         assertTrue(Files.exists(migratedEssentials));
         assertFalse(Files.exists(essentials));
+        assertTrue(Files.exists(migratedLuckPerms));
+        assertFalse(Files.exists(luckPerms));
         assertContains(migratedEssentials, OFFLINE_UUID.toString());
         assertContains(migratedEssentials, OFFLINE_UUID.toString().replace("-", ""));
-        assertContains(residence, OFFLINE_UUID.toString());
+        assertContains(migratedLuckPerms, OFFLINE_UUID.toString());
+        assertContains(residence, ONLINE_UUID.toString());
         assertContains(residence, OTHER_UUID.toString());
         assertContains(unknownYaml, ONLINE_UUID.toString());
         assertContains(database, ONLINE_UUID.toString());
@@ -331,6 +361,8 @@ class MigrationIntegrationTest {
         assertTrue(rollback.successful());
         assertTrue(Files.exists(essentials));
         assertFalse(Files.exists(migratedEssentials));
+        assertTrue(Files.exists(luckPerms));
+        assertFalse(Files.exists(migratedLuckPerms));
         assertContains(essentials, ONLINE_UUID.toString());
         assertContains(residence, ONLINE_UUID.toString());
     }

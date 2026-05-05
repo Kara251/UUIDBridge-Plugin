@@ -9,12 +9,12 @@ import java.util.Optional;
 
 public final class PluginTargetPresets {
     private static final List<Preset> PRESETS = List.of(
-        new Preset("essentialsx-userdata", "plugins/essentials/userdata/", DataAdapters.YAML_TEXT, true),
-        new Preset("luckperms-yaml-users", "plugins/luckperms/yaml-storage/users/", DataAdapters.YAML_TEXT, true),
-        new Preset("luckperms-json-users", "plugins/luckperms/json-storage/users/", DataAdapters.JSON, true),
-        new Preset("residence-save", "plugins/residence/save/", DataAdapters.YAML_TEXT, false),
-        new Preset("worldguard-worlds", "plugins/worldguard/worlds/", DataAdapters.YAML_TEXT, false),
-        new Preset("economy-yaml", "plugins/economy/", DataAdapters.YAML_TEXT, false)
+        new Preset("essentialsx-userdata", "plugins/essentials/userdata/", DataAdapters.YAML_TEXT, true, true),
+        new Preset("luckperms-yaml-users", "plugins/luckperms/yaml-storage/users/", DataAdapters.YAML_TEXT, true, true),
+        new Preset("luckperms-json-users", "plugins/luckperms/json-storage/users/", DataAdapters.JSON, true, true),
+        new Preset("residence-save-candidate", "plugins/residence/save/", DataAdapters.YAML_TEXT, false, false),
+        new Preset("worldguard-worlds-candidate", "plugins/worldguard/worlds/", DataAdapters.YAML_TEXT, false, false),
+        new Preset("economy-yaml-candidate", "plugins/economy/", DataAdapters.YAML_TEXT, false, false)
     );
 
     private PluginTargetPresets() {
@@ -28,7 +28,8 @@ public final class PluginTargetPresets {
                 continue;
             }
             if (supportsAdapter(fileName, preset.adapter())) {
-                return Optional.of(new Target(preset.name(), preset.adapter(), preset.renameUuidFiles()));
+                String adapter = preset.writable() ? preset.adapter() : DataAdapters.UNSUPPORTED;
+                return Optional.of(new Target(preset.name(), adapter, preset.renameUuidFiles(), preset.writable()));
             }
         }
         return Optional.empty();
@@ -36,6 +37,7 @@ public final class PluginTargetPresets {
 
     public static boolean isRenameTarget(Path gameDir, Path file) {
         return targetFor(gameDir, file)
+            .filter(Target::writable)
             .filter(Target::renameUuidFiles)
             .filter(target -> uuidFileStem(file))
             .isPresent();
@@ -107,9 +109,9 @@ public final class PluginTargetPresets {
             .toLowerCase(Locale.ROOT);
     }
 
-    public record Target(String name, String adapter, boolean renameUuidFiles) {
+    public record Target(String name, String adapter, boolean renameUuidFiles, boolean writable) {
     }
 
-    private record Preset(String name, String pathPrefix, String adapter, boolean renameUuidFiles) {
+    private record Preset(String name, String pathPrefix, String adapter, boolean renameUuidFiles, boolean writable) {
     }
 }
